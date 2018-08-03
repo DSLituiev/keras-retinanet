@@ -15,7 +15,7 @@ limitations under the License.
 """
 
 from ..preprocessing.generator import Generator
-from ..utils.image import read_image_bgr
+from ..utils.image import read_image_bgr, read_image_rgb
 
 import os
 import numpy as np
@@ -29,7 +29,7 @@ class CocoGenerator(Generator):
     See https://github.com/cocodataset/cocoapi/tree/master/PythonAPI for more information.
     """
 
-    def __init__(self, data_dir, set_name, **kwargs):
+    def __init__(self, data_dir, set_name, order='bgr', **kwargs):
         """ Initialize a COCO data generator.
 
         Args
@@ -40,6 +40,7 @@ class CocoGenerator(Generator):
         self.set_name  = set_name
         self.coco      = COCO(os.path.join(data_dir, 'annotations', 'instances_' + set_name + '.json'))
         self.image_ids = self.coco.getImgIds()
+        self.order = order
 
         self.load_classes()
 
@@ -112,7 +113,11 @@ class CocoGenerator(Generator):
         """
         image_info = self.coco.loadImgs(self.image_ids[image_index])[0]
         path       = os.path.join(self.data_dir, 'images', self.set_name, image_info['file_name'])
-        return read_image_bgr(path)
+        if self.order == 'bgr':
+            return read_image_bgr(path)
+        else:
+            return read_image_rgb(path)
+
 
     def load_annotations(self, image_index):
         """ Load annotations for an image_index.

@@ -33,6 +33,15 @@ def read_image_bgr(path):
     return image[:, :, ::-1].copy()
 
 
+def read_image_rgb(path):
+    """ Read an image in BGR format.
+
+    Args
+        path: Path to the image.
+    """
+    image = np.asarray(Image.open(path).convert('RGB'))
+    return image.copy()
+
 def preprocess_image(x, mode='caffe'):
     """ Preprocess an image by subtracting the ImageNet mean.
 

@@ -80,7 +80,13 @@ def model_with_weights(model, weights, skip_mismatch):
     return model
 
 
-def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0, freeze_backbone=False):
+def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0, 
+                  skip_mismatch=True,
+                  freeze_backbone=False, lr=1e-5,
+                  score_threshold       = 0.05,
+                  max_detections        = 300,
+                  nms_threshold         = 0.5,
+                  alpha=0.25, gamma=2.0):
     """ Creates three models (model, training_model, prediction_model).
 
     Args
@@ -99,31 +105,39 @@ def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0, freeze_
 
     # Keras recommends initialising a multi-gpu model on the CPU to ease weight sharing, and to prevent OOM errors.
     # optionally wrap in a parallel model
+    #import ipdb; ipdb.set_trace()
     if multi_gpu > 1:
         from keras.utils import multi_gpu_model
         with tf.device('/cpu:0'):
-            model = model_with_weights(backbone_retinanet(num_classes, modifier=modifier), weights=weights, skip_mismatch=True)
+            model = model_with_weights(backbone_retinanet(num_classes, modifier=modifier), 
+                                       weights=weights, skip_mismatch=skip_mismatch)
         training_model = multi_gpu_model(model, gpus=multi_gpu)
     else:
-        model          = model_with_weights(backbone_retinanet(num_classes, modifier=modifier), weights=weights, skip_mismatch=True)
+        model = model_with_weights(backbone_retinanet(num_classes, modifier=modifier),
+                                   weights=weights, skip_mismatch=skip_mismatch)
         training_model = model
 
     # make prediction model
-    prediction_model = retinanet_bbox(model=model)
+    prediction_model = retinanet_bbox(model=model,
+                                      score_threshold       = score_threshold,
+                                      max_detections        = max_detections,
+                                      nms_threshold         = nms_threshold,
+                                      )
 
     # compile model
     training_model.compile(
         loss={
             'regression'    : losses.smooth_l1(),
-            'classification': losses.focal()
+            'classification': losses.focal(alpha=alpha, gamma=gamma)
         },
-        optimizer=keras.optimizers.adam(lr=1e-5, clipnorm=0.001)
+        optimizer=keras.optimizers.adam(lr=lr, clipnorm=0.001)
     )
 
     return model, training_model, prediction_model
 
 
-def create_callbacks(model, training_model, prediction_model, validation_generator, args):
+def create_callbacks(model, training_model, prediction_model, validation_generator, args,
+    lr_drop_factor=0.5):
     """ Creates the callbacks to use during training.
 
     Args
@@ -184,7 +198,7 @@ def create_callbacks(model, training_model, prediction_model, validation_generat
 
     callbacks.append(keras.callbacks.ReduceLROnPlateau(
         monitor  = 'loss',
-        factor   = 0.1,
+        factor   = lr_drop_factor,
         patience = 2,
         verbose  = 1,
         mode     = 'auto',
@@ -235,12 +249,14 @@ def create_generators(args, preprocess_image):
             args.coco_path,
             'train2017',
             transform_generator=transform_generator,
+            order=args.order,
             **common_args
         )
 
         validation_generator = CocoGenerator(
             args.coco_path,
             'val2017',
+            order=args.order,
             **common_args
         )
     elif args.dataset_type == 'pascal':
@@ -380,7 +396,11 @@ def parse_args(args):
     group.add_argument('--weights',           help='Initialize the model with weights from a file.')
     group.add_argument('--no-weights',        help='Don\'t initialize the model with any weights.', dest='imagenet_weights', action='store_const', const=False)
 
+    parser.add_argument('--lr',              help='learning rate.', type=float, default=1e-5)
+    parser.add_argument('--loss-alpha',      help='learning rate.', type=float, default=0.25)
+    parser.add_argument('--loss-gamma',      help='learning rate.', type=float, default=2.0)
     parser.add_argument('--backbone',        help='Backbone model used by retinanet.', default='resnet50', type=str)
+    parser.add_argument('--preprocess-mode', help='Preprocessing mode : {"caffe", "tf", "none"}', default='caffe', type=str)
     parser.add_argument('--batch-size',      help='Size of the batches.', default=1, type=int)
     parser.add_argument('--gpu',             help='Id of the GPU to use (as reported by nvidia-smi).')
     parser.add_argument('--multi-gpu',       help='Number of GPUs to use for parallel processing.', type=int, default=0)
@@ -395,7 +415,11 @@ def parse_args(args):
     parser.add_argument('--random-transform', help='Randomly transform image and annotations.', action='store_true')
     parser.add_argument('--image-min-side', help='Rescale the image so the smallest side is min_side.', type=int, default=800)
     parser.add_argument('--image-max-side', help='Rescale the image if the largest side is larger than max_side.', type=int, default=1333)
-
+    parser.add_argument('--order', help='color channel order', type=str, default='bgr')
+    parser.add_argument('--score-threshold',      help='', type=float, default=0.05)
+    parser.add_argument('--nms-threshold',      help='', type=float, default=0.5)
+    parser.add_argument('--max-detections',      help='', type=int, default=300)
+ 
     return check_args(parser.parse_args(args))
 
 
@@ -406,8 +430,11 @@ def main(args=None):
     args = parse_args(args)
 
     # create object that stores backbone information
-    backbone = models.backbone(args.backbone)
+    backbone = models.backbone(args.backbone, preprocess_mode=args.preprocess_mode)
 
+    #print("backbone")
+    #print('='*30)
+    #print(backbone.retinanet.summary())
     # make sure keras is the minimum required version
     check_keras_version()
 
@@ -437,7 +464,12 @@ def main(args=None):
             num_classes=train_generator.num_classes(),
             weights=weights,
             multi_gpu=args.multi_gpu,
-            freeze_backbone=args.freeze_backbone
+            freeze_backbone=args.freeze_backbone,
+            lr=args.lr,
+            alpha=args.loss_alpha, gamma=args.loss_gamma,
+            score_threshold       = args.score_threshold,
+            max_detections        = args.max_detections,
+            nms_threshold         = args.nms_threshold,
         )
 
     # print model summary

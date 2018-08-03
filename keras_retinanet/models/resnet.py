@@ -28,9 +28,10 @@ class ResNetBackbone(Backbone):
     """ Describes backbone information and provides utility functions.
     """
 
-    def __init__(self, backbone):
+    def __init__(self, backbone, preprocess_mode='caffe'):
         super(ResNetBackbone, self).__init__(backbone)
         self.custom_objects.update(keras_resnet.custom_objects)
+        self.preprocess_mode = preprocess_mode
 
     def retinanet(self, *args, **kwargs):
         """ Returns a retinanet model using the correct backbone.
@@ -72,7 +73,7 @@ class ResNetBackbone(Backbone):
     def preprocess_image(self, inputs):
         """ Takes as input an image and prepares it for being passed through the network.
         """
-        return preprocess_image(inputs, mode='caffe')
+        return preprocess_image(inputs, mode=self.preprocess_mode)
 
 
 def resnet_retinanet(num_classes, backbone='resnet50', inputs=None, modifier=None, **kwargs):
@@ -106,7 +107,7 @@ def resnet_retinanet(num_classes, backbone='resnet50', inputs=None, modifier=Non
         resnet = modifier(resnet)
 
     # create the full model
-    return retinanet.retinanet(inputs=inputs, num_classes=num_classes, backbone_layers=resnet.outputs[1:], **kwargs)
+    return retinanet.RetinaNet(inputs=inputs, num_classes=num_classes, backbone_layers=resnet.outputs[1:], **kwargs)
 
 
 def resnet50_retinanet(num_classes, inputs=None, **kwargs):
