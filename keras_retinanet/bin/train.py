@@ -24,6 +24,7 @@ import warnings
 import keras
 import keras.preprocessing.image
 import tensorflow as tf
+from attrdict import AttrDict
 
 # Allow relative imports when being executed as script.
 if __name__ == "__main__" and __package__ is None:
@@ -86,7 +87,8 @@ def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0,
                   score_threshold       = 0.05,
                   max_detections        = 300,
                   nms_threshold         = 0.5,
-                  alpha=0.25, gamma=2.0):
+                  alpha=0.25, gamma=2.0,
+                  submodels=None):
     """ Creates three models (model, training_model, prediction_model).
 
     Args
@@ -113,8 +115,9 @@ def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0,
                                        weights=weights, skip_mismatch=skip_mismatch)
         training_model = multi_gpu_model(model, gpus=multi_gpu)
     else:
-        model = model_with_weights(backbone_retinanet(num_classes, modifier=modifier),
-                                   weights=weights, skip_mismatch=skip_mismatch)
+        # this instantiates the model
+        retinanet = backbone_retinanet(num_classes, modifier=modifier, submodels=submodels)
+        model = model_with_weights(retinanet, weights=weights, skip_mismatch=skip_mismatch)
         training_model = model
 
     # make prediction model
@@ -182,10 +185,12 @@ def create_callbacks(model, training_model, prediction_model, validation_generat
     # save the model
     if args.snapshots:
         # ensure directory created first; otherwise h5py will error after epoch.
-        makedirs(args.snapshot_path)
+        save_dir = os.path.join(args.snapshot_path, arghash)
+        makedirs(save_dir)
+        args.to_yaml(os.path.join(save_dir, "run.info"))
         checkpoint = keras.callbacks.ModelCheckpoint(
             os.path.join(
-                args.snapshot_path,
+                save_dir,
                 '{backbone}_{dataset_type}_{{epoch:02d}}.h5'.format(backbone=args.backbone, dataset_type=args.dataset_type)
             ),
             verbose=1,
@@ -416,6 +421,7 @@ def parse_args(args):
     parser.add_argument('--image-min-side', help='Rescale the image so the smallest side is min_side.', type=int, default=800)
     parser.add_argument('--image-max-side', help='Rescale the image if the largest side is larger than max_side.', type=int, default=1333)
     parser.add_argument('--order', help='color channel order', type=str, default='bgr')
+    parser.add_argument('--submodels', help='None|joint_submodels|', type=str, default=None)
     parser.add_argument('--score-threshold',      help='', type=float, default=0.05)
     parser.add_argument('--nms-threshold',      help='', type=float, default=0.5)
     parser.add_argument('--max-detections',      help='', type=int, default=300)
@@ -428,6 +434,10 @@ def main(args=None):
     if args is None:
         args = sys.argv[1:]
     args = parse_args(args)
+    args = AttrDict(args.__dict__)
+    args.add_git()
+    arghash = args.md5
+    print("argument hash:", arghash)
 
     # create object that stores backbone information
     backbone = models.backbone(args.backbone, preprocess_mode=args.preprocess_mode)
@@ -470,6 +480,7 @@ def main(args=None):
             score_threshold       = args.score_threshold,
             max_detections        = args.max_detections,
             nms_threshold         = args.nms_threshold,
+            submodels=args.submodels,
         )
 
     # print model summary
@@ -494,6 +505,8 @@ def main(args=None):
     training_model.fit_generator(
         generator=train_generator,
         steps_per_epoch=args.steps,
+        validation_data=validation_generator,
+        validation_steps=len(validation_generator),
         epochs=args.epochs,
         verbose=1,
         callbacks=callbacks,

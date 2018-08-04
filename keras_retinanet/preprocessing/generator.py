@@ -277,6 +277,9 @@ class Generator(object):
     def __next__(self):
         return self.next()
 
+    def __len__(self):
+        return len(self.groups)
+
     def next(self):
         # advance the group index
         with self.lock:

@@ -74,7 +74,8 @@ def default_classification_model(
     return keras.models.Model(inputs=inputs, outputs=outputs, name=name)
 
 
-def default_regression_model(num_anchors, pyramid_feature_size=256, regression_feature_size=256, name='regression_submodel'):
+def default_regression_model(num_anchors, pyramid_feature_size=256,
+                             regression_feature_size=256, name='regression_submodel'):
     """ Creates the default regression submodel.
 
     Args
@@ -113,6 +114,145 @@ def default_regression_model(num_anchors, pyramid_feature_size=256, regression_f
     return keras.models.Model(inputs=inputs, outputs=outputs, name=name)
 
 
+class CommonPFModel(keras.models.Model):
+    def __init__(num_anchors, pyramid_feature_size=256,
+                 feature_sizes=[256]*2, 
+                 name='regression_submodel',
+                 activation='relu'):
+        """ Creates the default joint submodel.
+
+        Args
+            num_anchors             : Number of anchors to regress for each feature level.
+            pyramid_feature_size    : The number of filters to expect from the feature pyramid levels.
+            regression_feature_size : The number of filters to use in the layers in the regression submodel.
+            name                    : The name of the submodel.
+
+        Returns
+            A keras.models.Model that predicts regression values for each anchor.
+        """
+        # All new conv layers except the final one in the
+        # RetinaNet (classification) subnets are initialized
+        # with bias b = 0 and a Gaussian weight fill with stddev = 0.01.
+        options = {
+            'kernel_size'        : 3,
+            'strides'            : 1,
+            'padding'            : 'same',
+            'kernel_initializer' : keras.initializers.normal(mean=0.0, stddev=0.01, seed=None),
+            'bias_initializer'   : 'zeros'
+        }
+
+        inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
+        outputs = inputs
+        for i,fs in enumerate(feature_sizes):
+            outputs = keras.layers.Conv2D(
+                filters=fs,
+                activation=activation,
+                name='pyramid_joint_{}'.format(i),
+                **options
+            )(outputs)
+
+        super(CommonPFModel, self).__init__(inputs=inputs, outputs=pyramids, name=name)
+
+
+class RegrModel(keras.models.Model):
+    def __init__(num_anchors, pyramid_feature_size=256,
+                 feature_sizes=[256]*2, 
+                 name='regression_submodel',
+                 activation='relu'):
+        """ Creates the default regression submodel.
+
+        Args
+            num_anchors             : Number of anchors to regress for each feature level.
+            pyramid_feature_size    : The number of filters to expect from the feature pyramid levels.
+            regression_feature_size : The number of filters to use in the layers in the regression submodel.
+            name                    : The name of the submodel.
+
+        Returns
+            A keras.models.Model that predicts regression values for each anchor.
+        """
+        # All new conv layers except the final one in the
+        # RetinaNet (classification) subnets are initialized
+        # with bias b = 0 and a Gaussian weight fill with stddev = 0.01.
+        options = {
+            'kernel_size'        : 3,
+            'strides'            : 1,
+            'padding'            : 'same',
+            'kernel_initializer' : keras.initializers.normal(mean=0.0, stddev=0.01, seed=None),
+            'bias_initializer'   : 'zeros'
+        }
+
+        inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
+        outputs = inputs
+        for i,fs in enumerate(feature_sizes):
+            outputs = keras.layers.Conv2D(
+                filters=fs,
+                activation=activation,
+                name='pyramid_regression_{}'.format(i),
+                **options
+            )(outputs)
+
+        outputs = keras.layers.Conv2D(num_anchors * 4, name='pyramid_regression', **options)(outputs)
+        outputs = keras.layers.Reshape((-1, 4), name='pyramid_regression_reshape')(outputs)
+        super(RegrModel, self).__init__(inputs=inputs, outputs=pyramids, name=name)
+
+
+class ClassModel(keras.models.Model):
+    def __init__(
+                num_classes,
+                num_anchors,
+                pyramid_feature_size=256,
+                prior_probability=0.01,
+                classification_feature_size=256,
+                feature_sizes=[256]*2, 
+                name='classification_submodel',
+                activation='relu',
+                final_activation=False,
+                ):
+
+        """ Creates the default regression submodel.
+
+        Args
+            num_classes                 : Number of classes to predict a score for at each feature level.
+            num_anchors                 : Number of anchors to predict classification scores for at each feature level.
+            pyramid_feature_size        : The number of filters to expect from the feature pyramid levels.
+            classification_feature_size : The number of filters to use in the layers in the classification submodel.
+            name                        : The name of the submodel.
+
+        Returns
+            A keras.models.Model that predicts classes for each anchor.
+        """
+        options = {
+            'kernel_size' : 3,
+            'strides'     : 1,
+            'padding'     : 'same',
+        }
+
+        inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
+        outputs = inputs
+        for i,fs in enumerate(feature_sizes):
+            outputs = keras.layers.Conv2D(
+                filters=fs,
+                activation=activation,
+                name='pyramid_classification_{}'.format(i),
+                kernel_initializer=keras.initializers.normal(mean=0.0, stddev=0.01, seed=None),
+                bias_initializer='zeros',
+                **options
+                )(outputs)
+
+        outputs = keras.layers.Conv2D(
+            filters=num_classes * num_anchors,
+            kernel_initializer=keras.initializers.zeros(),
+            bias_initializer=initializers.PriorProbability(probability=prior_probability),
+            name='pyramid_classification',
+            **options
+            )(outputs)
+
+        # reshape output and apply sigmoid
+        outputs = keras.layers.Reshape((-1, num_classes),
+                                       name='pyramid_classification_reshape')(outputs)
+        if final_activation:
+            outputs = keras.layers.Activation('sigmoid', name='pyramid_classification_sigmoid')(outputs)
+        super(ClassModel, self).__init__(inputs=inputs, outputs=pyramids, name=name)
 
 
 class AnchorParameters:
@@ -143,6 +283,34 @@ AnchorParameters.default = AnchorParameters(
     ratios  = np.array([0.5, 1, 2], keras.backend.floatx()),
     scales  = np.array([2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)], keras.backend.floatx()),
 )
+
+
+def joint_submodels(num_classes, num_anchors):
+    """ Create a list of default submodels used for object detection.
+
+    The default submodels contains a regression submodel and a classification submodel.
+
+    Args
+        num_classes : Number of classes to use.
+        num_anchors : Number of base anchors.
+
+    Returns
+        A list of tuple, where the first element is the name of the submodel and the second element is the submodel itself.
+    """
+
+    inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
+    common_out = CommonPFModel(num_classes,)(inputs)
+    regr_out = RegrModel(num_anchors)(common_out)
+
+    class_out = ClassModel(num_classes, num_anchors, final_activation=False)(common_out)
+    class_out = keras.layers.Concat(regr_out, class_out)
+    class_out = TimeDistributed(Dense(32))(class_out)
+    class_out = TimeDistributed(Dense(num_classes))(class_out)
+
+    return [
+        ('regression', Model(inputs=inputs, outputs=regr_out, name='regr_model')),
+        ('classification', Model(inputs=inputs, outputs=class_out, name='class_model'))
+    ]
 
 
 def default_submodels(num_classes, num_anchors):
@@ -252,6 +420,8 @@ class RetinaNet(keras.models.Model):
         """
         if submodels is None:
             submodels = default_submodels(num_classes, num_anchors)
+        elif submodels == 'joint_submodels':
+            submodels = joint_submodels(num_classes, num_anchors)
 
         C3, C4, C5 = backbone_layers
 
