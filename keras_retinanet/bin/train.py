@@ -88,6 +88,9 @@ def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0,
                   max_detections        = 300,
                   nms_threshold         = 0.5,
                   alpha=0.25, gamma=2.0,
+                  share_rpn=True,
+                  class_feature_sizes   = [256]*4,
+                  regr_feature_sizes    = [256]*4,
                   submodels=None):
     """ Creates three models (model, training_model, prediction_model).
 
@@ -116,7 +119,11 @@ def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0,
         training_model = multi_gpu_model(model, gpus=multi_gpu)
     else:
         # this instantiates the model
-        retinanet = backbone_retinanet(num_classes, modifier=modifier, submodels=submodels)
+        retinanet = backbone_retinanet(num_classes, modifier=modifier, submodels=submodels,
+                                      share_rpn=share_rpn,
+                                      class_feature_sizes = class_feature_sizes,
+                                      regr_feature_sizes  = regr_feature_sizes,
+                                      )
         model = model_with_weights(retinanet, weights=weights, skip_mismatch=skip_mismatch)
         training_model = model
 
@@ -417,6 +424,9 @@ def parse_args(args):
     parser.add_argument('--no-snapshots',    help='Disable saving snapshots.', dest='snapshots', action='store_false')
     parser.add_argument('--no-evaluation',   help='Disable per epoch evaluation.', dest='evaluation', action='store_false')
     parser.add_argument('--freeze-backbone', help='Freeze training of backbone layers.', action='store_true')
+    parser.add_argument('--share-rpn', help='Share weights between RPN networks.', action='store_false')
+    parser.add_argument('--class-feature-sizes', nargs='+', type=int, default=[256]*4)
+    parser.add_argument('--regr-feature-sizes', nargs='+', type=int, default=[256]*4)
     parser.add_argument('--random-transform', help='Randomly transform image and annotations.', action='store_true')
     parser.add_argument('--image-min-side', help='Rescale the image so the smallest side is min_side.', type=int, default=800)
     parser.add_argument('--image-max-side', help='Rescale the image if the largest side is larger than max_side.', type=int, default=1333)
@@ -480,7 +490,10 @@ def main(args=None):
             score_threshold       = args.score_threshold,
             max_detections        = args.max_detections,
             nms_threshold         = args.nms_threshold,
-            submodels=args.submodels,
+            submodels             = args.submodels,
+            share_rpn             = args.share_rpn,
+            class_feature_sizes   = args.class_feature_sizes,
+            regr_feature_sizes    = args.regr_feature_sizes,
         )
 
     # print model summary

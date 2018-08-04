@@ -26,9 +26,9 @@ def default_classification_model(
     num_anchors,
     pyramid_feature_size=256,
     prior_probability=0.01,
-    classification_feature_size=256,
+    classification_feature_size=[256]*4,
     name='classification_submodel'
-):
+    ):
     """ Creates the default regression submodel.
 
     Args
@@ -49,9 +49,9 @@ def default_classification_model(
 
     inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
     outputs = inputs
-    for i in range(4):
+    for i,fs in enumerate(feature_sizes):
         outputs = keras.layers.Conv2D(
-            filters=classification_feature_size,
+            filters=fs,
             activation='relu',
             name='pyramid_classification_{}'.format(i),
             kernel_initializer=keras.initializers.normal(mean=0.0, stddev=0.01, seed=None),
@@ -75,7 +75,7 @@ def default_classification_model(
 
 
 def default_regression_model(num_anchors, pyramid_feature_size=256,
-                             regression_feature_size=256, name='regression_submodel'):
+                             feature_sizes=[256]*4, name='regression_submodel'):
     """ Creates the default regression submodel.
 
     Args
@@ -100,9 +100,9 @@ def default_regression_model(num_anchors, pyramid_feature_size=256,
 
     inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
     outputs = inputs
-    for i in range(4):
+    for i,fs in enumerate(feature_sizes):
         outputs = keras.layers.Conv2D(
-            filters=regression_feature_size,
+            filters=fs,
             activation='relu',
             name='pyramid_regression_{}'.format(i),
             **options
@@ -313,7 +313,9 @@ def joint_submodels(num_classes, num_anchors):
     ]
 
 
-def default_submodels(num_classes, num_anchors):
+def default_submodels(num_classes, num_anchors,
+                     class_feature_sizes=[256]*4,
+                     regr_feature_sizes=[256]*4):
     """ Create a list of default submodels used for object detection.
 
     The default submodels contains a regression submodel and a classification submodel.
@@ -326,26 +328,37 @@ def default_submodels(num_classes, num_anchors):
         A list of tuple, where the first element is the name of the submodel and the second element is the submodel itself.
     """
     return [
-        ('regression', default_regression_model(num_anchors)),
-        ('classification', default_classification_model(num_classes, num_anchors))
+        ('regression', default_regression_model(num_anchors,
+                            feature_sizes=regr_feature_sizes)),
+        ('classification', default_classification_model(num_classes, num_anchors,
+                            feature_sizes=class_feature_sizes))
     ]
 
 
-def __build_model_pyramid(name, model, features):
+def __build_model_pyramid(name, model, features, share=True):
     """ Applies a single submodel to each FPN level.
 
     Args
         name     : Name of the submodel.
         model    : The submodel to evaluate.
         features : The FPN features.
+        share    : share weights between pyramid levels
 
     Returns
         A tensor containing the response from the submodel on the FPN features.
     """
-    return keras.layers.Concatenate(axis=1, name=name)([model(f) for f in features])
+    if share:
+        return keras.layers.Concatenate(axis=1, name=name)([model(f) for f in features])
+    else:
+        inputs = []
+        new = True
+        for f in features:
+            mo = model if new else keras.models.clone_model(model)
+            inputs.append(mo(f))
+        return keras.layers.Concatenate(axis=1, name=name)(inputs)
 
 
-def _build_pyramid(models, features):
+def _build_pyramid(models, features, share=True):
     """ Applies all submodels to each FPN level.
 
     Args
@@ -355,7 +368,7 @@ def _build_pyramid(models, features):
     Returns
         A list of tensors, one for each submodel.
     """
-    return [__build_model_pyramid(n, m, features) for n, m in models]
+    return [__build_model_pyramid(n, m, features, share=share) for n, m in models]
 
 
 def __build_anchors(anchor_parameters, features):
@@ -394,7 +407,10 @@ class RetinaNet(keras.models.Model):
         num_anchors             = 9,
         create_pyramid_features = None,
         submodels               = None,
-        name                    = 'retinanet'
+        name                    = 'retinanet',
+        share_rpn               = True,
+        class_feature_sizes=[256]*4,
+        regr_feature_sizes=[256]*4)
     ):
         """ Construct a RetinaNet model on top of a backbone.
 
@@ -419,9 +435,13 @@ class RetinaNet(keras.models.Model):
             ```
         """
         if submodels is None:
-            submodels = default_submodels(num_classes, num_anchors)
+            submodels = default_submodels(num_classes, num_anchors,
+                                          class_feature_sizes=class_feature_sizes,
+                                          regr_feature_sizes=regr_feature_sizes)
         elif submodels == 'joint_submodels':
-            submodels = joint_submodels(num_classes, num_anchors)
+            submodels = joint_submodels(num_classes, num_anchors,
+                                        class_feature_sizes=class_feature_sizes,
+                                        regr_feature_sizes=regr_feature_sizes)
 
         C3, C4, C5 = backbone_layers
 
@@ -431,7 +451,7 @@ class RetinaNet(keras.models.Model):
         features = create_pyramid_features(C3, C4, C5)
 
         # for all pyramid levels, run available submodels
-        pyramids = _build_pyramid(submodels, features)
+        pyramids = _build_pyramid(submodels, features, share=share_rpn)
         super(RetinaNet, self).__init__(inputs=inputs, outputs=pyramids, name=name)
         #return keras.models.Model(inputs=inputs, outputs=pyramids, name=name)
 
