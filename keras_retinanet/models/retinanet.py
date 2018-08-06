@@ -220,38 +220,49 @@ class ClassModel(keras.models.Model):
         Returns
             A keras.models.Model that predicts classes for each anchor.
         """
+        super(ClassModel, self).__init__(name=name)
         options = {
             'kernel_size' : 3,
             'strides'     : 1,
             'padding'     : 'same',
         }
+        self.feature_sizes = feature_sizes
+        self.final_activation = final_activation
 
-        inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
-        outputs = inputs
         for i,fs in enumerate(feature_sizes):
-            outputs = keras.layers.Conv2D(
-                filters=fs,
-                activation=activation,
-                name='pyramid_classification_{}'.format(i),
-                kernel_initializer=keras.initializers.normal(mean=0.0, stddev=0.01, seed=None),
-                bias_initializer='zeros',
-                **options
-                )(outputs)
+            self.__dict__['pyramid_classification_{}'.format(i)] =\
+                keras.layers.Conv2D(
+                            filters=fs,
+                            activation=activation,
+                            name='pyramid_classification_{}'.format(i),
+                            kernel_initializer=keras.initializers.normal(mean=0.0, stddev=0.01, seed=None),
+                            bias_initializer='zeros',
+                            **options
+                            )
 
-        outputs = keras.layers.Conv2D(
+        self.pyramid_classification = keras.layers.Conv2D(
             filters=num_classes * num_anchors,
             kernel_initializer=keras.initializers.zeros(),
             bias_initializer=initializers.PriorProbability(probability=prior_probability),
             name='pyramid_classification',
             **options
-            )(outputs)
+            )
 
         # reshape output and apply sigmoid
-        outputs = keras.layers.Reshape((-1, num_classes),
-                                       name='pyramid_classification_reshape')(outputs)
-        if final_activation:
-            outputs = keras.layers.Activation('sigmoid', name='pyramid_classification_sigmoid')(outputs)
-        super(ClassModel, self).__init__(inputs=inputs, outputs=pyramids, name=name)
+        self.reshape = keras.layers.Reshape((-1, num_classes),
+                                       name='pyramid_classification_reshape')
+        self.final_activation = keras.layers.Activation('sigmoid', name='pyramid_classification_sigmoid')
+
+    def call(self, inputs):
+        outputs = inputs
+        for i,fs in enumerate(feature_sizes):
+            outputs = self.__dict__['pyramid_classification_{}'.format(i)](outputs)
+        outputs = self.pyramid_classification(outputs)
+        outputs = self.reshape(outputs)
+        if self.final_activation:
+            outputs = self.final_activation(outputs)
+        return outputs
+    
 
 
 class AnchorParameters:
@@ -284,7 +295,12 @@ AnchorParameters.default = AnchorParameters(
 )
 
 
-def joint_submodels(num_classes, num_anchors):
+
+def joint_submodels(num_classes, num_anchors,
+                    pyramid_feature_size=256,
+                    common_feature_sizes=[256,256],
+                    class_feature_sizes=[256,256],
+                    regr_feature_sizes=[256,256]):
     """ Create a list of default submodels used for object detection.
 
     The default submodels contains a regression submodel and a classification submodel.
@@ -299,12 +315,11 @@ def joint_submodels(num_classes, num_anchors):
 
     inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
     common_out = CommonPFModel(num_classes,)(inputs)
-    regr_out = RegrModel(num_anchors)(common_out)
+    regr_out   = RegrModel(num_anchors, feature_sizes=regr_feature_sizes)(common_out)
 
-    class_out = ClassModel(num_classes, num_anchors, final_activation=False)(common_out)
-    class_out = keras.layers.Concat(regr_out, class_out)
-    class_out = TimeDistributed(Dense(32))(class_out)
-    class_out = TimeDistributed(Dense(num_classes))(class_out)
+    class_out = ClassModel(num_classes, num_anchors,
+                           feature_sizes=class_feature_sizes,
+                           final_activation=True)(common_out)
 
     return [
         ('regression', Model(inputs=inputs, outputs=regr_out, name='regr_model')),
@@ -437,7 +452,7 @@ def RetinaNet(
             submodels = default_submodels(num_classes, num_anchors,
                                           class_feature_sizes=class_feature_sizes,
                                           regr_feature_sizes=regr_feature_sizes)
-        elif submodels == 'joint_submodels':
+        elif submodels.startswith('joint'):
             submodels = joint_submodels(num_classes, num_anchors,
                                         class_feature_sizes=class_feature_sizes,
                                         regr_feature_sizes=regr_feature_sizes,
