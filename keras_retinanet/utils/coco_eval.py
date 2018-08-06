@@ -22,7 +22,8 @@ import numpy as np
 import json
 
 
-def evaluate_coco(generator, model, threshold=0.05):
+def evaluate_coco(generator, model, threshold=0.05,
+                  resdir='.'):
     """ Use the pycocotools to evaluate a COCO model on a dataset.
 
     Args
@@ -75,12 +76,12 @@ def evaluate_coco(generator, model, threshold=0.05):
         return
 
     # write output
-    json.dump(results, open('{}_bbox_results.json'.format(generator.set_name), 'w'), indent=4)
-    json.dump(image_ids, open('{}_processed_image_ids.json'.format(generator.set_name), 'w'), indent=4)
+    json.dump(results, open('{}/{}_bbox_results.json'.format(resdir, generator.set_name), 'w'), indent=4)
+    json.dump(image_ids, open('{}/{}_processed_image_ids.json'.format(resdir, generator.set_name), 'w'), indent=4)
 
     # load results in COCO evaluation tool
     coco_true = generator.coco
-    coco_pred = coco_true.loadRes('{}_bbox_results.json'.format(generator.set_name))
+    coco_pred = coco_true.loadRes('{}/{}_bbox_results.json'.format(resdir, generator.set_name))
 
     # run COCO evaluation
     coco_eval = COCOeval(coco_true, coco_pred, 'bbox')
