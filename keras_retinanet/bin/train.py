@@ -24,7 +24,6 @@ import warnings
 import keras
 import keras.preprocessing.image
 import tensorflow as tf
-from attrdict import AttrDict
 
 # Allow relative imports when being executed as script.
 if __name__ == "__main__" and __package__ is None:
@@ -36,6 +35,7 @@ if __name__ == "__main__" and __package__ is None:
 from .. import layers  # noqa: F401
 from .. import losses
 from .. import models
+from ..attrdict import AttrDict
 from ..callbacks import RedirectModel
 from ..callbacks.eval import Evaluate
 from ..models.retinanet import retinanet_bbox
@@ -47,8 +47,8 @@ from ..utils.anchors import make_shapes_callback
 from ..utils.keras_version import check_keras_version
 from ..utils.model import freeze as freeze_model
 from ..utils.transform import random_transform_generator
-
-
+sys.path.append('/repos/kerastrainutils')
+from callbacks import CSVWallClockLogger
 def makedirs(path):
     # Intended behavior: try to create the directory,
     # pass if the directory exists already, fails otherwise.
@@ -91,6 +91,7 @@ def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0,
                   share_rpn=True,
                   class_feature_sizes   = [256]*4,
                   regr_feature_sizes    = [256]*4,
+                  common_feature_sizes  = [],
                   submodels=None):
     """ Creates three models (model, training_model, prediction_model).
 
@@ -123,6 +124,7 @@ def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0,
                                       share_rpn=share_rpn,
                                       class_feature_sizes = class_feature_sizes,
                                       regr_feature_sizes  = regr_feature_sizes,
+                                      common_feature_sizes  = common_feature_sizes,
                                       )
         model = model_with_weights(retinanet, weights=weights, skip_mismatch=skip_mismatch)
         training_model = model
@@ -164,9 +166,14 @@ def create_callbacks(model, training_model, prediction_model, validation_generat
 
     tensorboard_callback = None
 
+    if args.snapshots:
+        save_dir = os.path.join(args.snapshot_path, args.md5)
+    else:
+        save_dir = 'snapshots'
+
     if args.tensorboard_dir:
         tensorboard_callback = keras.callbacks.TensorBoard(
-            log_dir                = args.tensorboard_dir,
+            log_dir                = save_dir, #args.tensorboard_dir,
             histogram_freq         = 0,
             batch_size             = args.batch_size,
             write_graph            = True,
@@ -188,11 +195,13 @@ def create_callbacks(model, training_model, prediction_model, validation_generat
             evaluation = Evaluate(validation_generator, tensorboard=tensorboard_callback)
         evaluation = RedirectModel(evaluation, prediction_model)
         callbacks.append(evaluation)
+        csv_filename = os.path.join(save_dir, 'progress.csv')
+        callbacks.append(CSVWallClockLogger(csv_filename))
 
     # save the model
     if args.snapshots:
         # ensure directory created first; otherwise h5py will error after epoch.
-        save_dir = os.path.join(args.snapshot_path, arghash)
+        save_dir = os.path.join(args.snapshot_path, args.md5)
         makedirs(save_dir)
         args.to_yaml(os.path.join(save_dir, "run.info"))
         checkpoint = keras.callbacks.ModelCheckpoint(
@@ -424,9 +433,10 @@ def parse_args(args):
     parser.add_argument('--no-snapshots',    help='Disable saving snapshots.', dest='snapshots', action='store_false')
     parser.add_argument('--no-evaluation',   help='Disable per epoch evaluation.', dest='evaluation', action='store_false')
     parser.add_argument('--freeze-backbone', help='Freeze training of backbone layers.', action='store_true')
-    parser.add_argument('--share-rpn', help='Share weights between RPN networks.', action='store_false')
+    parser.add_argument('--no-share-rpn', help='Share weights between RPN networks.', action='store_false', dest='share_rpn')
     parser.add_argument('--class-feature-sizes', nargs='+', type=int, default=[256]*4)
     parser.add_argument('--regr-feature-sizes', nargs='+', type=int, default=[256]*4)
+    parser.add_argument('--common-feature-sizes', nargs='+', type=int, default=[])
     parser.add_argument('--random-transform', help='Randomly transform image and annotations.', action='store_true')
     parser.add_argument('--image-min-side', help='Rescale the image so the smallest side is min_side.', type=int, default=800)
     parser.add_argument('--image-max-side', help='Rescale the image if the largest side is larger than max_side.', type=int, default=1333)
@@ -494,6 +504,7 @@ def main(args=None):
             share_rpn             = args.share_rpn,
             class_feature_sizes   = args.class_feature_sizes,
             regr_feature_sizes    = args.regr_feature_sizes,
+            common_feature_sizes  = args.common_feature_sizes,
         )
 
     # print model summary
