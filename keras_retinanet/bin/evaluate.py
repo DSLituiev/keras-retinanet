@@ -52,9 +52,10 @@ def create_generator(args):
 
         validation_generator = CocoGenerator(
             args.coco_path,
-            'val2017',
+            args.coco_tag,#            'val2017',
             image_min_side=args.image_min_side,
-            image_max_side=args.image_max_side
+            image_max_side=args.image_max_side,
+            save_path = args.save_path,
         )
     elif args.dataset_type == 'pascal':
         validation_generator = PascalVocGenerator(
@@ -85,6 +86,7 @@ def parse_args(args):
 
     coco_parser = subparsers.add_parser('coco')
     coco_parser.add_argument('coco_path', help='Path to dataset directory (ie. /tmp/COCO).')
+    coco_parser.add_argument('--coco-tag', help='.', default='val2017')
 
     pascal_parser = subparsers.add_parser('pascal')
     pascal_parser.add_argument('pascal_path', help='Path to dataset directory (ie. /tmp/VOCdevkit).')
@@ -101,7 +103,7 @@ def parse_args(args):
     parser.add_argument('--iou-threshold',   help='IoU Threshold to count for a positive detection (defaults to 0.5).', default=0.5, type=float)
     parser.add_argument('--max-detections',  help='Max Detections per image (defaults to 100).', default=100, type=int)
     parser.add_argument('--save-path',       help='Path for saving images with detections (doesn\'t work for COCO).')
-    parser.add_argument('--image-min-side',  help='Rescale the image so the smallest side is min_side.', type=int, default=800)
+    parser.add_argument('--image-min-side',  help='Rescale the image so the smallest side is min_side.', type=int, default=512)
     parser.add_argument('--image-max-side',  help='Rescale the image if the largest side is larger than max_side.', type=int, default=1333)
 
     return parser.parse_args(args)
@@ -124,6 +126,8 @@ def main(args=None):
     # make save path if it doesn't exist
     if args.save_path is not None and not os.path.exists(args.save_path):
         os.makedirs(args.save_path)
+    elif args.save_path is None:
+        args.save_path = os.path.dirname(args.model)
 
     # create the generator
     generator = create_generator(args)
@@ -138,7 +142,7 @@ def main(args=None):
     # start evaluation
     if args.dataset_type == 'coco':
         from ..utils.coco_eval import evaluate_coco
-        evaluate_coco(generator, model, args.score_threshold)
+        evaluate_coco(generator, model, args.score_threshold, resdir=args.save_path)
     else:
         average_precisions = evaluate(
             generator,
