@@ -24,6 +24,7 @@ import warnings
 import keras
 import keras.preprocessing.image
 import tensorflow as tf
+from imgaug import augmenters as iaa
 
 # Allow relative imports when being executed as script.
 if __name__ == "__main__" and __package__ is None:
@@ -92,7 +93,8 @@ def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0,
                   class_feature_sizes   = [256]*4,
                   regr_feature_sizes    = [256]*4,
                   common_feature_sizes  = [],
-                  submodels=None):
+                  coordconv             = False,
+                  submodels             = None):
     """ Creates three models (model, training_model, prediction_model).
 
     Args
@@ -125,6 +127,7 @@ def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0,
                                       class_feature_sizes = class_feature_sizes,
                                       regr_feature_sizes  = regr_feature_sizes,
                                       common_feature_sizes  = common_feature_sizes,
+                                      coordconv = coordconv,
                                       )
         model = model_with_weights(retinanet, weights=weights, skip_mismatch=skip_mismatch)
         training_model = model
@@ -149,7 +152,7 @@ def create_models(backbone_retinanet, num_classes, weights, multi_gpu=0,
 
 
 def create_callbacks(model, training_model, prediction_model, validation_generator, args,
-    lr_drop_factor=0.5):
+    lr_drop_factor=0.5, lr_patience=2):
     """ Creates the callbacks to use during training.
 
     Args
@@ -190,7 +193,8 @@ def create_callbacks(model, training_model, prediction_model, validation_generat
             from ..callbacks.coco import CocoEval
 
             # use prediction model for evaluation
-            evaluation = CocoEval(validation_generator, tensorboard=tensorboard_callback)
+            evaluation = CocoEval(validation_generator, tensorboard=tensorboard_callback,
+				  resdir=save_dir)
         else:
             evaluation = Evaluate(validation_generator, tensorboard=tensorboard_callback)
         evaluation = RedirectModel(evaluation, prediction_model)
@@ -201,7 +205,7 @@ def create_callbacks(model, training_model, prediction_model, validation_generat
     # save the model
     if args.snapshots:
         # ensure directory created first; otherwise h5py will error after epoch.
-        save_dir = os.path.join(args.snapshot_path, args.md5)
+        #save_dir = os.path.join(args.snapshot_path, args.md5)
         makedirs(save_dir)
         args.to_yaml(os.path.join(save_dir, "run.info"))
         checkpoint = keras.callbacks.ModelCheckpoint(
@@ -220,7 +224,7 @@ def create_callbacks(model, training_model, prediction_model, validation_generat
     callbacks.append(keras.callbacks.ReduceLROnPlateau(
         monitor  = 'loss',
         factor   = lr_drop_factor,
-        patience = 2,
+        patience = lr_patience,
         verbose  = 1,
         mode     = 'auto',
         epsilon  = 0.0001,
@@ -230,6 +234,34 @@ def create_callbacks(model, training_model, prediction_model, validation_generat
 
     return callbacks
 
+def create_homogenous_augm_wrapper(args):
+    seq = []
+    if args.freq_gaussian_noise > 0.0:
+        seq.append( iaa.Sometimes(args.freq_gaussian_noise, iaa.AdditiveGaussianNoise(scale=0.05*255, per_channel=0.25)) )
+    if args.freq_gaussian_blur > 0.0:
+        seq.append( iaa.Sometimes(args.freq_gaussian_blur, iaa.GaussianBlur(sigma=args.sigma_gaussian_blur)) )
+    if args.freq_hue_sat > 0.0:
+        # change hue and saturation
+        sometimes = lambda aug: iaa.Sometimes(args.freq_hue_sat, aug)
+        seq.append( sometimes(iaa.AddToHueAndSaturation((-args.hue_sat, args.hue_sat))) )
+
+    if args.freq_sharpen >0.0:
+        seq.append( iaa.Sometimes(args.freq_sharpen, iaa.Sharpen(alpha=args.sigma_sharpen)) )
+    if len(seq)>0:    
+        seq = iaa.Sequential(seq, random_order=True)
+        print("Augmenting with color/brightness/noise")
+        print(seq)
+    else:
+        seq = None
+
+    def homogenous_augm_wrapper(gen):
+        print('gen has next:', hasattr(gen, '__next__'))
+        #import ipdb; ipdb.set_trace()
+        for img, ann in gen:
+            if seq is not None:
+                img = seq.augment_images(img)
+            yield img, ann
+    return homogenous_augm_wrapper
 
 def create_generators(args, preprocess_image):
     """ Create generators for training and validation.
@@ -245,8 +277,13 @@ def create_generators(args, preprocess_image):
         'preprocess_image' : preprocess_image,
     }
 
+        
+
     # create random transform generator for augmenting training data
     if args.random_transform:
+        flip_x_chance = 0.5 if args.flip_x else 0.0
+        flip_y_chance = 0.5 if args.flip_y else 0.0
+
         transform_generator = random_transform_generator(
             min_rotation=-0.1,
             max_rotation=0.1,
@@ -256,8 +293,8 @@ def create_generators(args, preprocess_image):
             max_shear=0.1,
             min_scaling=(0.9, 0.9),
             max_scaling=(1.1, 1.1),
-            flip_x_chance=0.5,
-            flip_y_chance=0.5,
+            flip_x_chance=flip_x_chance,
+            flip_y_chance=flip_y_chance,
         )
     else:
         transform_generator = random_transform_generator(flip_x_chance=0.5)
@@ -280,6 +317,8 @@ def create_generators(args, preprocess_image):
             order=args.order,
             **common_args
         )
+
+        #import ipdb; ipdb.set_trace()
     elif args.dataset_type == 'pascal':
         train_generator = PascalVocGenerator(
             args.pascal_path,
@@ -428,6 +467,8 @@ def parse_args(args):
     parser.add_argument('--multi-gpu-force', help='Extra flag needed to enable (experimental) multi-gpu support.', action='store_true')
     parser.add_argument('--epochs',          help='Number of epochs to train.', type=int, default=50)
     parser.add_argument('--steps',           help='Number of steps per epoch.', type=int, default=10000)
+    parser.add_argument('--lr-patience',     help='', type=int, default=2)
+    parser.add_argument('--lr-drop-factor',  help='', type=float, default=.5)
     parser.add_argument('--snapshot-path',   help='Path to store snapshots of models during training (defaults to \'./snapshots\')', default='./snapshots')
     parser.add_argument('--tensorboard-dir', help='Log directory for Tensorboard output', default='./logs')
     parser.add_argument('--no-snapshots',    help='Disable saving snapshots.', dest='snapshots', action='store_false')
@@ -437,19 +478,36 @@ def parse_args(args):
     parser.add_argument('--class-feature-sizes', nargs='+', type=int, default=[256]*4)
     parser.add_argument('--regr-feature-sizes', nargs='+', type=int, default=[256]*4)
     parser.add_argument('--common-feature-sizes', nargs='+', type=int, default=[])
+    parser.add_argument('--coordconv', help='apply Coord Conv', action='store_true')
     parser.add_argument('--random-transform', help='Randomly transform image and annotations.', action='store_true')
-    parser.add_argument('--image-min-side', help='Rescale the image so the smallest side is min_side.', type=int, default=800)
+    parser.add_argument('--flip-x', help='Randomly flip LR image and annotations.', action='store_true')
+    parser.add_argument('--flip-y', help='Randomly flip UD image and annotations.', action='store_true')
+    parser.add_argument('--image-min-side', help='Rescale the image so the smallest side is min_side.', type=int, default=512)
     parser.add_argument('--image-max-side', help='Rescale the image if the largest side is larger than max_side.', type=int, default=1333)
     parser.add_argument('--order', help='color channel order', type=str, default='bgr')
     parser.add_argument('--submodels', help='None|joint_submodels|', type=str, default=None)
     parser.add_argument('--score-threshold',      help='', type=float, default=0.05)
     parser.add_argument('--nms-threshold',      help='', type=float, default=0.5)
     parser.add_argument('--max-detections',      help='', type=int, default=300)
- 
+    parser.add_argument('--freq-gaussian-noise', help='frequency of random augmentation: noise', type=float, default=0.0)  
+    parser.add_argument('--freq-gaussian-blur',  help='frequency of random augmentation: blur',  type=float, default=0.0) 
+    parser.add_argument('--freq-hue-sat',        help='frequency of random augmentation: hue/saturation', type=float, default=0.0)
+    parser.add_argument('--freq-sharpen',        help='frequency of random augmentation: sharpening', type=float, default=0.0) 
+    parser.add_argument('--hue-sat',             help='', type=float, default=30.0) 
+    parser.add_argument('--sigma-gaussian-blur', help='', type=float, default=[0.0, 2.0], nargs='+')
+    parser.add_argument('--sigma-sharpen',       help='', type=float, default=[0.0, 1.0], nargs='+')
+
     return check_args(parser.parse_args(args))
 
+from tensorflow.python.client import device_lib
+
+def get_available_gpus():
+    local_device_protos = device_lib.list_local_devices()
+    return [x.name for x in local_device_protos if x.device_type == 'GPU']
 
 def main(args=None):
+    print("GPUS:", get_available_gpus())
+
     # parse arguments
     if args is None:
         args = sys.argv[1:]
@@ -505,6 +563,7 @@ def main(args=None):
             class_feature_sizes   = args.class_feature_sizes,
             regr_feature_sizes    = args.regr_feature_sizes,
             common_feature_sizes  = args.common_feature_sizes,
+            coordconv             = args.coordconv,
         )
 
     # print model summary
@@ -523,11 +582,14 @@ def main(args=None):
         prediction_model,
         validation_generator,
         args,
+        lr_patience=args.lr_patience,
+        lr_drop_factor=args.lr_drop_factor,
     )
 
     # start training
+    homogenous_augm_wrapper = create_homogenous_augm_wrapper(args)
     training_model.fit_generator(
-        generator=train_generator,
+        generator=homogenous_augm_wrapper(train_generator),
         steps_per_epoch=args.steps,
         validation_data=validation_generator,
         validation_steps=len(validation_generator),

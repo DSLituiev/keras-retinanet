@@ -21,7 +21,7 @@ from ..utils.coco_eval import evaluate_coco
 class CocoEval(keras.callbacks.Callback):
     """ Performs COCO evaluation on each epoch.
     """
-    def __init__(self, generator, tensorboard=None, threshold=0.05):
+    def __init__(self, generator, tensorboard=None, threshold=0.05, resdir='.'):
         """ CocoEval callback intializer.
 
         Args
@@ -32,6 +32,7 @@ class CocoEval(keras.callbacks.Callback):
         self.generator = generator
         self.threshold = threshold
         self.tensorboard = tensorboard
+        self.resdir = resdir
 
         super(CocoEval, self).__init__()
 
@@ -50,7 +51,7 @@ class CocoEval(keras.callbacks.Callback):
                     'AR @[ IoU=0.50:0.95 | area= small | maxDets=100 ]',
                     'AR @[ IoU=0.50:0.95 | area=medium | maxDets=100 ]',
                     'AR @[ IoU=0.50:0.95 | area= large | maxDets=100 ]']
-        coco_eval_stats = evaluate_coco(self.generator, self.model, self.threshold)
+        coco_eval_stats = evaluate_coco(self.generator, self.model, self.threshold, resdir=self.resdir)
         if coco_eval_stats is not None and self.tensorboard is not None and self.tensorboard.writer is not None:
             import tensorflow as tf
             summary = tf.Summary()

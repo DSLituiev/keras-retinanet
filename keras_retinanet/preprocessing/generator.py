@@ -43,6 +43,7 @@ class Generator(object):
     def __init__(
         self,
         transform_generator = None,
+        homogenous_transform = None,
         batch_size=1,
         group_method='ratio',  # one of 'none', 'random', 'ratio'
         shuffle_groups=True,
@@ -52,6 +53,7 @@ class Generator(object):
         compute_anchor_targets=anchor_targets_bbox,
         compute_shapes=guess_shapes,
         preprocess_image=preprocess_image,
+        save_path=None,
     ):
         """ Initialize Generator object.
 
@@ -68,6 +70,7 @@ class Generator(object):
             preprocess_image       : Function handler for preprocessing an image (scaling / normalizing) for passing through a network.
         """
         self.transform_generator    = transform_generator
+        self.homogenous_transform   = homogenous_transform
         self.batch_size             = int(batch_size)
         self.group_method           = group_method
         self.shuffle_groups         = shuffle_groups
@@ -77,11 +80,15 @@ class Generator(object):
         self.compute_anchor_targets = compute_anchor_targets
         self.compute_shapes         = compute_shapes
         self.preprocess_image       = preprocess_image
+        self.save_path              = save_path
 
         self.group_index = 0
         self.lock        = threading.Lock()
 
         self.group_images()
+
+    def __iter__(self):
+        return self
 
     def size(self):
         """ Size of the dataset.
@@ -168,6 +175,8 @@ class Generator(object):
             annotations = annotations.copy()
             for index in range(annotations.shape[0]):
                 annotations[index, :4] = transform_aabb(transform, annotations[index, :4])
+        if self.homogenous_transform:
+            image = self.homogenous_transform(image)
 
         return image, annotations
 

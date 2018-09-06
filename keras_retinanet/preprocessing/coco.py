@@ -29,7 +29,7 @@ class CocoGenerator(Generator):
     See https://github.com/cocodataset/cocoapi/tree/master/PythonAPI for more information.
     """
 
-    def __init__(self, data_dir, set_name, order='bgr', **kwargs):
+    def __init__(self, data_dir, set_name, order='bgr', save_path=None, **kwargs):
         """ Initialize a COCO data generator.
 
         Args
@@ -38,9 +38,12 @@ class CocoGenerator(Generator):
         """
         self.data_dir  = data_dir
         self.set_name  = set_name
-        self.coco      = COCO(os.path.join(data_dir, 'annotations', 'instances_' + set_name + '.json'))
+        cocofile = os.path.join(data_dir, 'annotations', 'instances_' + set_name + '.json')
+        print('COCOFILE', cocofile)
+        self.coco      = COCO(cocofile)
         self.image_ids = self.coco.getImgIds()
         self.order = order
+        self.save_path = save_path
 
         self.load_classes()
 
