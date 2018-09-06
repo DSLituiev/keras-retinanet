@@ -48,7 +48,10 @@ def default_classification_model(
         'padding'     : 'same',
     }
 
-    inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
+    if keras.backend.image_data_format() == 'channels_first':
+        inputs  = keras.layers.Input(shape=(pyramid_feature_size, None, None))
+    else:
+        inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
     outputs = inputs
     for i,fs in enumerate(feature_sizes):
         outputs = keras.layers.Conv2D(
@@ -69,6 +72,8 @@ def default_classification_model(
     )(outputs)
 
     # reshape output and apply sigmoid
+    if keras.backend.image_data_format() == 'channels_first':
+        outputs = keras.layers.Permute((2, 3, 1), name='pyramid_classification_permute')(outputs)
     outputs = keras.layers.Reshape((-1, num_classes), name='pyramid_classification_reshape')(outputs)
     outputs = keras.layers.Activation('sigmoid', name='pyramid_classification_sigmoid')(outputs)
 
@@ -99,7 +104,10 @@ def default_regression_model(num_anchors, pyramid_feature_size=256,
         'bias_initializer'   : 'zeros'
     }
 
-    inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
+    if keras.backend.image_data_format() == 'channels_first':
+        inputs  = keras.layers.Input(shape=(pyramid_feature_size, None, None))
+    else:
+        inputs  = keras.layers.Input(shape=(None, None, pyramid_feature_size))
     outputs = inputs
     for i,fs in enumerate(feature_sizes):
         outputs = keras.layers.Conv2D(
@@ -110,6 +118,8 @@ def default_regression_model(num_anchors, pyramid_feature_size=256,
         )(outputs)
 
     outputs = keras.layers.Conv2D(num_anchors * 4, name='pyramid_regression', **options)(outputs)
+    if keras.backend.image_data_format() == 'channels_first':
+        outputs = keras.layers.Permute((2, 3, 1), name='pyramid_regression_permute')(outputs)
     outputs = keras.layers.Reshape((-1, 4), name='pyramid_regression_reshape')(outputs)
 
     return keras.models.Model(inputs=inputs, outputs=outputs, name=name)
